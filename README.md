@@ -1,18 +1,20 @@
 # Personal AI Activity Collector
 
-Local-first Linux activity collector for building a personal AI context stream.
+Local-first Linux activity/context collector for personal AI workflows.
+
+Personal AI records semantic activity on your own computer — apps, browser interactions, code/editor context, media state, and optional messaging context — and produces structured reports for later AI analysis.
 
 > Use this software only on devices and accounts you own or are explicitly authorized to monitor.
 
 ## Install
 
-### Arch Linux / Linux
+### Arch Linux / Linux — one command
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ahmedkdbdh1354/gggt/main/install.sh | bash
 ```
 
-Then launch it from anywhere:
+Then launch it from any terminal:
 
 ```bash
 personal-ai
@@ -29,37 +31,66 @@ personal-ai path
 personal-ai uninstall
 ```
 
-## What it captures
+The installer:
 
-- active application/window and presence/idle/AFK
-- local filesystem/source-code changes
-- terminal command structure and observed outcomes
-- direct browser page/tab metadata
-- semantic browser interactions: clicks, focus, hover, forms, controls, links, SPA routes
-- before/after button and control states
-- code editor snapshots and compiler/result output
+- installs required packages on Arch Linux when needed
+- installs Personal AI under `~/.local/share/personal-ai-activity-collector`
+- creates the `personal-ai` launcher
+- creates a desktop launcher
+- configures Native Messaging manifests for supported browsers
+- preserves `config`, `data`, `output`, and `logs` during upgrades
+- verifies the downloaded v5.4.0 runtime with SHA-256 before installation
+
+## Browser extension
+
+The Native Messaging bridge is configured automatically by the installer.
+
+### Firefox
+
+This public build is not Mozilla-signed yet, so standard Firefox requires a manual temporary-add-on step for local use:
+
+1. Open `about:debugging`
+2. Choose **This Firefox**
+3. Choose **Load Temporary Add-on**
+4. Select:
+   `~/.local/share/personal-ai-activity-collector/browser_extension/firefox/manifest.json`
+
+### Chromium / Chrome
+
+Load this directory as an unpacked extension:
+
+```text
+~/.local/share/personal-ai-activity-collector/browser_extension/chromium
+```
+
+## What v5.4.0 captures
+
+- foreground application/session activity
+- semantic browser clicks and controls
+- link targets and SPA route changes
+- control state before/after, such as like, expand, checkbox, and switch
+- debounced text/editor state snapshots
+- code editor context
+- compile/result context when directly observed
 - media play/pause/progress/ended evidence
-- messaging/conversation context for the personal AI workflow
+- optional messaging/conversation context
+- filesystem/development activity where supported
 
-It does not record a raw key-by-key keyboard stream. Passwords, payment/card data, OTPs, cookies/session tokens, API secrets, private keys and similar credentials remain filtered.
+It does not intentionally capture raw key-by-key keyboard streams, passwords, payment/card fields, OTPs, cookies/session tokens, API secrets, private keys, or similar credentials.
 
-## Browser integration
+## Platform
 
-Native Messaging setup is installed automatically.
-
-The bundled browser extension still needs to be loaded/installed in the browser. Firefox release builds require Mozilla signing for permanent installation; without signing, local testing uses `about:debugging`. Chromium-based browsers can load the bundled unpacked extension.
+Primary target: Linux, especially Arch Linux + Wayland/Hyprland. Other Linux desktops may work with reduced collector coverage.
 
 ## Version
 
-Current release: **v5.4.0**
+Current public release: **v5.4.0**
 
 Verified runtime archive SHA-256:
 
 ```text
-08886dc7ce5ba3862b803b2ec4ba80c74b610244baa92c1cdda532f38cdbdd83
+d99f011d3bdebddc1329be61d2482e5b32b205f72364d1fe729bb82f552d2ad5
 ```
-
-The one-command installer downloads the published payload and checks this SHA-256 before installing.
 
 ## License
 
