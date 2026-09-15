@@ -1,0 +1,114 @@
+name: Sign Firefox Extension
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sign-firefox:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: "5.4.0"
+      EXPECTED_SHA256: "d99f011d3bdebddc1329be61d2482e5b32b205f72364d1fe729bb82f552d2ad5"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Reconstruct verified source package
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build
+          cat payload/v${VERSION}/part-*.b64 > build/payload.b64
+          base64 -d build/payload.b64 > build/personal-ai-${VERSION}.tar.xz
+          echo "${EXPECTED_SHA256}  build/personal-ai-${VERSION}.tar.xz" | sha256sum -c -
+          mkdir -p build/source
+          tar -xJf build/personal-ai-${VERSION}.tar.xz -C build/source
+
+      - name: Locate and validate Firefox extension
+        id: extension
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MANIFEST="$(find build/source -type f -path '*/browser_extension/firefox/manifest.json' | head -n1)"
+          if [[ -z "${MANIFEST}" ]]; then
+            echo "Firefox manifest.json not found" >&2
+            exit 1
+          fi
+          EXT_DIR="$(dirname "${MANIFEST}")"
+          echo "dir=${EXT_DIR}" >> "$GITHUB_OUTPUT"
+
+          python3 - "$MANIFEST" <<'PY'
+          import json, sys
+          p = sys.argv[1]
+          with open(p, encoding='utf-8') as f:
+              m = json.load(f)
+          mv = m.get('manifest_version')
+          gecko = m.get('browser_specific_settings', {}).get('gecko', {})
+          addon_id = gecko.get('id') or m.get('applications', {}).get('gecko', {}).get('id')
+          print(f"manifest_version={mv}")
+          print(f"addon_id={addon_id}")
+          if mv == 3 and not addon_id:
+              raise SystemExit('Manifest V3 requires browser_specific_settings.gecko.id before AMO signing')
+          PY
+
+      - name: Prepare clean extension source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/firefox-clean
+          rsync -a --delete --exclude='*.xpi' --exclude='web-ext-artifacts' "${{ steps.extension.outputs.dir }}/" build/firefox-clean/
+
+      - name: Install Mozilla web-ext
+        run: npm install --global web-ext@latest
+
+      - name: Lint Firefox extension
+        run: web-ext lint --source-dir build/firefox-clean
+
+      - name: Sign with Mozilla AMO (unlisted/self-distributed)
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "${AMO_JWT_ISSUER:-}" || -z "${AMO_JWT_SECRET:-}" ]]; then
+            echo "Missing AMO_JWT_ISSUER or AMO_JWT_SECRET repository secrets." >&2
+            exit 1
+          fi
+          mkdir -p signed-artifacts
+          web-ext sign \
+            --channel=unlisted \
+            --source-dir build/firefox-clean \
+            --artifacts-dir signed-artifacts \
+            --api-key "$AMO_JWT_ISSUER" \
+            --api-secret "$AMO_JWT_SECRET" \
+            --timeout 900000
+
+      - name: Show signed artifact
+        run: ls -lah signed-artifacts
+
+      - name: Upload signed XPI as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-ai-firefox-signed-v${{ env.VERSION }}
+          path: signed-artifacts/*.xpi
+          if-no-files-found: error
+
+      - name: Publish signed XPI to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          TAG="firefox-signed-v${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" signed-artifacts/*.xpi --clobber
+          else
+            gh release create "$TAG" signed-artifacts/*.xpi \
+              --title "Firefox signed extension v${VERSION}" \
+              --notes "Mozilla-signed unlisted/self-distributed Firefox extension for Personal AI Activity Collector v${VERSION}."
+          fi
