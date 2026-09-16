@@ -1,0 +1,31 @@
+name: Export incomplete v5.6 overlay
+
+on:
+  pull_request:
+    paths:
+      - ".github/v5.6-broken-export-trigger"
+      - ".github/workflows/export-v5.6-broken-overlay.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export-overlay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct current v5.6 overlay bytes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build
+          cat overlay/v5.6.0/part-*.b64 > build/v5.6.0-current.b64
+          base64 -d build/v5.6.0-current.b64 > build/v5.6.0-current.tar.xz
+          sha256sum build/v5.6.0-current.tar.xz
+      - name: Upload current overlay bytes
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5.6.0-current-overlay
+          path: build/v5.6.0-current.tar.xz
+          if-no-files-found: error
