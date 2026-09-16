@@ -13,23 +13,40 @@ jobs:
   sign-firefox:
     runs-on: ubuntu-latest
     env:
-      VERSION: "5.4.0"
-      EXPECTED_SHA256: "d99f011d3bdebddc1329be61d2482e5b32b205f72364d1fe729bb82f552d2ad5"
+      VERSION: "5.5.0"
+      BASE_VERSION: "5.4.0"
+      BASE_SHA256: "d99f011d3bdebddc1329be61d2482e5b32b205f72364d1fe729bb82f552d2ad5"
+      OVERLAY_SHA256: "ed273fbd1ca7c8f83d075d9be6458c109a9e21080dac3f5bf52aadca4ef15a71"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Reconstruct verified source package
+      - name: Reconstruct verified v5.5.0 source package
         shell: bash
         run: |
           set -Eeuo pipefail
-          mkdir -p build
-          cat payload/v${VERSION}/part-*.b64 > build/payload.b64
-          base64 -d build/payload.b64 > build/personal-ai-${VERSION}.tar.xz
-          echo "${EXPECTED_SHA256}  build/personal-ai-${VERSION}.tar.xz" | sha256sum -c -
           mkdir -p build/source
-          tar -xJf build/personal-ai-${VERSION}.tar.xz -C build/source
+
+          cat payload/v${BASE_VERSION}/part-*.b64 > build/base.b64
+          base64 -d build/base.b64 > build/base.tar.xz
+          echo "${BASE_SHA256}  build/base.tar.xz" | sha256sum -c -
+          tar -xJf build/base.tar.xz -C build/source
+
+          cat \
+            overlay/v${VERSION}/part-00.b64 \
+            overlay/v${VERSION}/part-01.b64 \
+            overlay/v${VERSION}/part-02a.b64 \
+            overlay/v${VERSION}/part-02b.b64 \
+            overlay/v${VERSION}/part-02c.b64 \
+            overlay/v${VERSION}/part-03.b64 \
+            overlay/v${VERSION}/part-04a.b64 \
+            overlay/v${VERSION}/part-04b.b64 \
+            overlay/v${VERSION}/part-04c.b64 \
+            overlay/v${VERSION}/part-05.b64 > build/overlay.b64
+          base64 -d build/overlay.b64 > build/overlay.tar.xz
+          echo "${OVERLAY_SHA256}  build/overlay.tar.xz" | sha256sum -c -
+          tar -xJf build/overlay.tar.xz -C build/source/personal-ai-activity-collector
 
       - name: Locate and validate Firefox extension
         id: extension
@@ -52,8 +69,12 @@ jobs:
           mv = m.get('manifest_version')
           gecko = m.get('browser_specific_settings', {}).get('gecko', {})
           addon_id = gecko.get('id') or m.get('applications', {}).get('gecko', {}).get('id')
+          version = m.get('version')
           print(f"manifest_version={mv}")
+          print(f"version={version}")
           print(f"addon_id={addon_id}")
+          if version != '5.5.0':
+              raise SystemExit(f'Expected Firefox extension 5.5.0, got {version!r}')
           if mv == 3 and not addon_id:
               raise SystemExit('Manifest V3 requires browser_specific_settings.gecko.id before AMO signing')
           PY
