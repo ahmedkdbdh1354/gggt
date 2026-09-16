@@ -1,0 +1,50 @@
+name: Export verified v5.5 source
+
+on:
+  pull_request:
+    paths:
+      - ".github/v5.5-source-export-trigger"
+      - ".github/workflows/export-v5.5-source.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    runs-on: ubuntu-latest
+    env:
+      BASE_VERSION: "5.4.0"
+      BASE_SHA256: "d99f011d3bdebddc1329be61d2482e5b32b205f72364d1fe729bb82f552d2ad5"
+      AUDIO_VERSION: "5.5.0"
+      AUDIO_SHA256: "ed273fbd1ca7c8f83d075d9be6458c109a9e21080dac3f5bf52aadca4ef15a71"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct verified v5.5 source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf build
+          mkdir -p build/source
+          cat payload/v${BASE_VERSION}/part-*.b64 > build/base.b64
+          base64 -d build/base.b64 > build/base.tar.xz
+          echo "${BASE_SHA256}  build/base.tar.xz" | sha256sum -c -
+          tar -xJf build/base.tar.xz -C build/source
+          ROOT="build/source/personal-ai-activity-collector"
+          test -d "$ROOT"
+          cat overlay/v${AUDIO_VERSION}/part-*.b64 > build/audio.b64
+          base64 -d build/audio.b64 > build/audio.tar.xz
+          echo "${AUDIO_SHA256}  build/audio.tar.xz" | sha256sum -c -
+          tar -xJf build/audio.tar.xz -C "$ROOT"
+          rm -rf "$ROOT/.ci-venv" "$ROOT/__pycache__"
+          tar -cJf build/personal-ai-v5.5.0-source.tar.xz -C build/source personal-ai-activity-collector
+          sha256sum build/personal-ai-v5.5.0-source.tar.xz
+
+      - name: Upload verified source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-ai-v5.5.0-source
+          path: build/personal-ai-v5.5.0-source.tar.xz
+          if-no-files-found: error
