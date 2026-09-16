@@ -1,0 +1,102 @@
+name: Validate Personal AI v5.6.0
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/validate-v5.6.0.yml"
+      - ".github/v5.6-validation-trigger"
+      - "overlay/v5.6.0/**"
+      - "overlay/v5.5.0/**"
+      - "payload/v5.4.0/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      BASE_VERSION: "5.4.0"
+      BASE_SHA256: "d99f011d3bdebddc1329be61d2482e5b32b205f72364d1fe729bb82f552d2ad5"
+      AUDIO_VERSION: "5.5.0"
+      AUDIO_SHA256: "ed273fbd1ca7c8f83d075d9be6458c109a9e21080dac3f5bf52aadca4ef15a71"
+      VERSION: "5.6.0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct verified runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf build
+          mkdir -p build/source
+
+          cat payload/v${BASE_VERSION}/part-*.b64 > build/base.b64
+          base64 -d build/base.b64 > build/base.tar.xz
+          echo "${BASE_SHA256}  build/base.tar.xz" | sha256sum -c -
+          tar -xJf build/base.tar.xz -C build/source
+          PACKAGE_ROOT="build/source/personal-ai-activity-collector"
+          test -d "$PACKAGE_ROOT"
+
+          cat overlay/v${AUDIO_VERSION}/part-*.b64 > build/audio.b64
+          base64 -d build/audio.b64 > build/audio.tar.xz
+          echo "${AUDIO_SHA256}  build/audio.tar.xz" | sha256sum -c -
+          tar -xJf build/audio.tar.xz -C "$PACKAGE_ROOT"
+
+          cat overlay/v${VERSION}/part-*.b64 > build/fix.b64
+          base64 -d build/fix.b64 > build/fix.tar.xz
+          FIX_SHA256="$(sha256sum build/fix.tar.xz | awk '{print $1}')"
+          echo "FIX_SHA256=${FIX_SHA256}" >> "$GITHUB_ENV"
+          echo "v${VERSION} overlay SHA-256: ${FIX_SHA256}"
+          tar -tJf build/fix.tar.xz
+          tar -xJf build/fix.tar.xz -C "$PACKAGE_ROOT"
+
+      - name: Validate Python syntax
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m compileall -q build/source/personal-ai-activity-collector
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd build/source/personal-ai-activity-collector
+          python3 -m venv .ci-venv
+          . .ci-venv/bin/activate
+          python -m pip install --upgrade pip
+          if [[ -f requirements.txt ]]; then pip install -r requirements.txt; fi
+          python -m unittest discover -s tests -v
+
+      - name: Validate browser JavaScript
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+          done < <(find build/source/personal-ai-activity-collector/browser_extension -type f -name '*.js' -print0)
+
+      - name: Validate public version identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json, pathlib, re
+          root = pathlib.Path('build/source/personal-ai-activity-collector')
+          expected = '5.6.0'
+          values = []
+          p = root / 'pyproject.toml'
+          if p.exists():
+              m = re.search(r'^version\s*=\s*["\x27]([^"\x27]+)', p.read_text(encoding='utf-8'), re.M)
+              if m:
+                  values.append((str(p), m.group(1)))
+          for p in (root/'browser_extension/chromium/manifest.json', root/'browser_extension/firefox/manifest.json'):
+              if p.exists():
+                  values.append((str(p), json.loads(p.read_text(encoding='utf-8')).get('version')))
+          print(values)
+          if not values or any(v != expected for _, v in values):
+              raise SystemExit(f'Expected public runtime version {expected}; got {values}')
+          PY
