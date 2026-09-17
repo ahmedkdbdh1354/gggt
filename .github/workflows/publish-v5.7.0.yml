@@ -1,0 +1,122 @@
+name: Publish Personal AI v5.7.0
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publish-v5.7.0.yml"
+      - "overlay/v5.7.0/**"
+      - "install.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-latest
+    env:
+      BASE_VERSION: "5.4.0"
+      BASE_SHA256: "d99f011d3bdebddc1329be61d2482e5b32b205f72364d1fe729bb82f552d2ad5"
+      AUDIO_VERSION: "5.5.0"
+      AUDIO_SHA256: "ed273fbd1ca7c8f83d075d9be6458c109a9e21080dac3f5bf52aadca4ef15a71"
+      VERSION: "5.7.0"
+      FIX_SHA256: "7a56d2dc4db64687d35d42d85ccd9e56b5136f35e1b7ef11299eb591ac77ff24"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct verified runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf build
+          mkdir -p build/source
+
+          cat payload/v${BASE_VERSION}/part-*.b64 > build/base.b64
+          base64 -d build/base.b64 > build/base.tar.xz
+          echo "${BASE_SHA256}  build/base.tar.xz" | sha256sum -c -
+          tar -xJf build/base.tar.xz -C build/source
+          PACKAGE_ROOT="build/source/personal-ai-activity-collector"
+          test -d "$PACKAGE_ROOT"
+
+          : > build/audio.b64
+          for part in \
+            part-00.b64 part-01.b64 part-02a.b64 part-02b.b64 part-02c.b64 \
+            part-03.b64 part-04a.b64 part-04b.b64 part-04c.b64 part-05.b64; do
+            cat "overlay/v${AUDIO_VERSION}/${part}" >> build/audio.b64
+          done
+          base64 -d build/audio.b64 > build/audio.tar.xz
+          echo "${AUDIO_SHA256}  build/audio.tar.xz" | sha256sum -c -
+          tar -xJf build/audio.tar.xz -C "$PACKAGE_ROOT"
+
+          cat overlay/v${VERSION}/part-*.b64 > build/fix.b64
+          base64 -d build/fix.b64 > build/fix.tar.xz
+          echo "${FIX_SHA256}  build/fix.tar.xz" | sha256sum -c -
+          tar -xJf build/fix.tar.xz -C "$PACKAGE_ROOT"
+
+      - name: Validate runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          PACKAGE_ROOT="build/source/personal-ai-activity-collector"
+          python3 -m compileall -q "$PACKAGE_ROOT"
+          bash -n "$PACKAGE_ROOT/packaging/install.sh"
+          python3 - "$PACKAGE_ROOT" <<'PY'
+          import json, pathlib, re, sys
+          root = pathlib.Path(sys.argv[1])
+          expected = "5.7.0"
+          text = (root / "pyproject.toml").read_text(encoding="utf-8")
+          match = re.search(r'^version\s*=\s*["\']([^"\']+)', text, re.M)
+          assert match and match.group(1) == expected, match.group(1) if match else "missing"
+          init_text = (root / "personal_ai_collector/__init__.py").read_text(encoding="utf-8")
+          assert f'__version__ = "{expected}"' in init_text
+          for rel in ("browser_extension/chromium/manifest.json", "browser_extension/firefox/manifest.json"):
+              assert json.loads((root / rel).read_text(encoding="utf-8"))["version"] == expected
+          print("Runtime identity verified:", expected)
+          PY
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+          done < <(find "$PACKAGE_ROOT/browser_extension" -type f -name '*.js' -print0)
+
+      - name: Build release ZIP and checksums
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/release
+          (cd build/source && zip -qr "../release/Personal-AI-Activity-Collector-v${VERSION}-LATEST.zip" personal-ai-activity-collector)
+          ZIP="build/release/Personal-AI-Activity-Collector-v${VERSION}-LATEST.zip"
+          ZIP_SHA256="$(sha256sum "$ZIP" | awk '{print $1}')"
+          {
+            echo "${ZIP_SHA256}  Personal-AI-Activity-Collector-v${VERSION}-LATEST.zip"
+            echo "${FIX_SHA256}  overlay-v${VERSION}.tar.xz"
+            echo "${AUDIO_SHA256}  overlay-v${AUDIO_VERSION}.tar.xz"
+            echo "${BASE_SHA256}  base-v${BASE_VERSION}.tar.xz"
+          } > build/release/SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ZIP="build/release/Personal-AI-Activity-Collector-v${VERSION}-LATEST.zip"
+          SUMS="build/release/SHA256SUMS.txt"
+          NOTES="Personal AI Activity Collector v${VERSION}\n\nFixes Start-button UI freezing and repairs local microphone/system-output capture + Whisper transcription on PipeWire/PulseAudio. The release is reconstructed from verified base/audio/fix overlays and compile-checked before publishing."
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            gh release upload "v${VERSION}" "$ZIP" "$SUMS" --clobber
+          else
+            gh release create "v${VERSION}" "$ZIP" "$SUMS" \
+              --target "${GITHUB_SHA}" \
+              --title "Personal AI Activity Collector v${VERSION}" \
+              --notes "$NOTES"
+          fi
+
+      - name: Upload CI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Personal-AI-Activity-Collector-v5.7.0-LATEST
+          path: |
+            build/release/Personal-AI-Activity-Collector-v5.7.0-LATEST.zip
+            build/release/SHA256SUMS.txt
